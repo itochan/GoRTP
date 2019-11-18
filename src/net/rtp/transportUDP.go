@@ -20,7 +20,10 @@ package rtp
 
 import (
 	"fmt"
+	"golang.org/x/net/context"
+	"golang.org/x/sys/unix"
 	"net"
+	"syscall"
 )
 
 // RtpTransportUDP implements the interfaces RtpTransportRecv and RtpTransportWrite for RTP transports.
@@ -51,10 +54,16 @@ func NewTransportUDP(addr *net.IPAddr, port int, zone string) (*TransportUDP, er
 // to this transport.
 //
 func (tp *TransportUDP) ListenOnTransports() (err error) {
-	tp.dataConn, err = net.ListenUDP(tp.localAddrRtp.Network(), tp.localAddrRtp)
+	lc := net.ListenConfig{
+		Control: listenCtrl,
+	}
+
+	conn, err := lc.ListenPacket(context.Background(), tp.localAddrRtp.Network(), tp.localAddrRtp.String())
+	// tp.dataConn, err = net.ListenUDP(tp.localAddrRtp.Network(), tp.localAddrRtp)
 	if err != nil {
 		return
 	}
+	tp.dataConn = conn.(*net.UDPConn)
 	tp.ctrlConn, err = net.ListenUDP(tp.localAddrRtcp.Network(), tp.localAddrRtcp)
 	if err != nil {
 		tp.dataConn.Close()
@@ -63,6 +72,21 @@ func (tp *TransportUDP) ListenOnTransports() (err error) {
 	}
 	go tp.readDataPacket()
 	go tp.readCtrlPacket()
+	return nil
+}
+
+// DSCP config for AES67
+func listenCtrl(network string, address string, c syscall.RawConn) error {
+	var operr error
+	var fn = func(s uintptr) {
+		operr = unix.SetsockoptInt(int(s), unix.IPPROTO_IP, unix.IP_TOS, 0x88)
+	}
+	if err := c.Control(fn); err != nil {
+		return err
+	}
+	if operr != nil {
+		return operr
+	}
 	return nil
 }
 
